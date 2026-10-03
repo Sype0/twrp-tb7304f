@@ -31,7 +31,10 @@ TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/kernel
 BOARD_KERNEL_BASE := 0x40078000
 BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2
 BOARD_KERNEL_PAGESIZE := 2048
-BOARD_RAMDISK_OFFSET := 0x03f88000
+# Stock loads the ramdisk at 0x44000000, but 0x44400000-0x44500000 is reserved
+# for ram_console/pstore and the TWRP ramdisk is larger than 4 MiB, so it is
+# loaded right after that region (0x44500000) instead.
+BOARD_RAMDISK_OFFSET := 0x04488000
 BOARD_KERNEL_TAGS_OFFSET := 0x0df88000
 BOARD_MKBOOTIMG_ARGS += --ramdisk_offset $(BOARD_RAMDISK_OFFSET)
 BOARD_MKBOOTIMG_ARGS += --tags_offset $(BOARD_KERNEL_TAGS_OFFSET)
