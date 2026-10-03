@@ -1,0 +1,14 @@
+# mount point    fstype    device                                                 flags
+/boot            emmc      /dev/block/platform/bootdevice/by-name/boot
+/recovery        emmc      /dev/block/platform/bootdevice/by-name/recovery       flags=backup=1
+/system          ext4      /dev/block/platform/bootdevice/by-name/system
+/system_image    emmc      /dev/block/platform/bootdevice/by-name/system
+/cache           ext4      /dev/block/platform/bootdevice/by-name/cache
+/data            ext4      /dev/block/platform/bootdevice/by-name/userdata
+/misc            emmc      /dev/block/platform/bootdevice/by-name/para
+/nvram           emmc      /dev/block/platform/bootdevice/by-name/nvram          flags=display="NVRAM";backup=1
+/proinfo         emmc      /dev/block/platform/bootdevice/by-name/proinfo        flags=display="Proinfo";backup=1
+/logo            emmc      /dev/block/platform/bootdevice/by-name/logo           flags=display="Logo";backup=1
+/lk              emmc      /dev/block/platform/bootdevice/by-name/lk             flags=display="LK";backup=1
+/external_sd     auto      /dev/block/mmcblk1p1    /dev/block/mmcblk1            flags=display="MicroSD";storage;wipeingui;removable
+/usb_otg         auto      /dev/block/sda1         /dev/block/sda                flags=display="USB OTG";storage;wipeingui;removable

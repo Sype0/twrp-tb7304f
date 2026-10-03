@@ -1,0 +1,116 @@
+# Builds TWRP for the Lenovo TB-7304F from the twrp-9.0 minimal manifest
+name: Build TWRP
+
+on:
+  push:
+    branches: [twrp-9.0]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+env:
+  MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git
+  MANIFEST_BRANCH: twrp-9.0
+  DEVICE: TB7304F
+  DEVICE_PATH: device/lenovo/TB7304F
+  TWRP_DIR: ${{ github.workspace }}/twrp
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    permissions:
+      contents: write
+
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache \
+                      /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /usr/local/share/powershell
+          df -h /
+
+      - name: Check out the device tree
+        uses: actions/checkout@v4
+        with:
+          path: tree
+
+      - name: Install the build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential cpio curl flex g++-multilib gcc-multilib git gnupg gperf \
+            lib32z1-dev libncurses5 libncurses5-dev libssl-dev libtinfo5 libxml2 libxml2-utils lzop \
+            patch python2 python3 rsync unzip xsltproc xz-utils zip zlib1g-dev
+          sudo ln -sf /usr/bin/python2 /usr/local/bin/python
+          sudo curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+          sudo chmod a+rx /usr/local/bin/repo
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global color.ui false
+
+      - name: Sync the TWRP sources
+        run: |
+          mkdir -p "$TWRP_DIR" && cd "$TWRP_DIR"
+          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
+          repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags
+          test -f build/envsetup.sh
+          df -h /
+
+      - name: Place the device tree
+        run: |
+          mkdir -p "$TWRP_DIR/$(dirname "$DEVICE_PATH")"
+          cp -a "$GITHUB_WORKSPACE/tree" "$TWRP_DIR/$DEVICE_PATH"
+          rm -rf "$TWRP_DIR/$DEVICE_PATH/.git" "$TWRP_DIR/$DEVICE_PATH/.github"
+
+      - name: Build
+        run: |
+          set +e
+          cd "$TWRP_DIR"
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL="C"
+          source build/envsetup.sh
+          lunch "omni_${DEVICE}-eng" || exit 1
+          mka recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          [ "${PIPESTATUS[0]}" = "0" ] || exit 1
+          ls -l "out/target/product/$DEVICE/recovery.img" || exit 1
+
+      - name: Collect the output
+        id: out
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cd "$GITHUB_WORKSPACE/dist"
+          cp -v "$TWRP_DIR/out/target/product/$DEVICE/recovery.img" recovery.img
+          python3 "$GITHUB_WORKSPACE/tree/tools/mtk_header.py" recovery.img recovery-mtk.img RECOVERY
+          max=$(grep -oP 'BOARD_RECOVERYIMAGE_PARTITION_SIZE := \K[0-9]+' "$GITHUB_WORKSPACE/tree/BoardConfig.mk")
+          for f in recovery.img recovery-mtk.img; do
+            size=$(stat -c %s "$f")
+            echo "$f: $size / $max bytes"
+            [ "$size" -le "$max" ] || { echo "$f does not fit the recovery partition"; exit 1; }
+          done
+          sha256sum *.img | tee sha256sums.txt
+          version=$(grep -oP 'TW_MAIN_VERSION_STR\s*"\K[^"]+' "$TWRP_DIR/bootable/recovery/variables.h" | head -n1)
+          echo "version=${version:-3.x}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Upload the artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-${{ steps.out.outputs.version }}-TB7304F
+          path: dist/*
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="twrp-${{ steps.out.outputs.version }}-TB7304F-${{ github.run_number }}"
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "TWRP ${{ steps.out.outputs.version }} for TB-7304F (build ${{ github.run_number }})" \
+            --notes "Untested. recovery.img is a plain Android boot image; recovery-mtk.img is the same image with MediaTek headers on the kernel and ramdisk."
