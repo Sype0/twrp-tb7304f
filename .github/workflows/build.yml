@@ -1,15 +1,13 @@
-# Builds TWRP for the Lenovo TB-7304F from the twrp-9.0 minimal manifest
-name: Build TWRP
+# Builds OrangeFox (fox_9.0) for the Lenovo TB-7304F
+name: Build OrangeFox
 
 on:
   push:
-    branches: [twrp-9.0]
+    branches: [fox-9.0]
     paths-ignore: ['**.md']
   workflow_dispatch:
 
 env:
-  MANIFEST_URL: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git
-  MANIFEST_BRANCH: twrp-9.0
   DEVICE: TB7304F
   DEVICE_PATH: device/lenovo/TB7304F
   TWRP_DIR: ${{ github.workspace }}/twrp
@@ -18,8 +16,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
-    permissions:
-      contents: write
 
     steps:
       - name: Free up disk space
@@ -47,12 +43,16 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global color.ui false
 
-      - name: Sync the TWRP sources
+      - name: Sync the OrangeFox sources
         run: |
-          mkdir -p "$TWRP_DIR" && cd "$TWRP_DIR"
-          repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
-          repo sync -c -j"$(nproc --all)" --force-sync --no-clone-bundle --no-tags
-          test -f build/envsetup.sh
+          # fox_9.0 is no longer maintained upstream; its sync script lives in
+          # the legacy directory of OrangeFox/sync
+          git clone --depth=1 https://gitlab.com/OrangeFox/sync.git "$GITHUB_WORKSPACE/sync"
+          cd "$GITHUB_WORKSPACE/sync/legacy"
+          bash orangefox_sync_legacy.sh --branch 9.0 --path "$TWRP_DIR"
+          test -f "$TWRP_DIR/build/envsetup.sh"
+          test -f "$TWRP_DIR/bootable/recovery/gui/theme/portrait_hdpi/ui.xml"
+          test -f "$TWRP_DIR/vendor/recovery/OrangeFox.sh"
           df -h /
 
       - name: Place the device tree
@@ -66,29 +66,46 @@ jobs:
           set +e
           cd "$TWRP_DIR"
           export ALLOW_MISSING_DEPENDENCIES=true
+          export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export LC_ALL="C"
+          export TARGET_ARCH=arm
+          export FOX_BUILD_TYPE=Unofficial
+          export OF_MAINTAINER=Sype0
+          # The recovery partition is 16 MiB and the kernel takes 7.5 MiB of it
+          export FOX_DRASTIC_SIZE_REDUCTION=1
+          export FOX_REMOVE_AAPT=1
+          export FOX_REMOVE_BASH=1
+          export FOX_REMOVE_ZIP_BINARY=1
+          export FOX_EXCLUDE_NANO_EDITOR=1
+          export FOX_USE_LZMA_COMPRESSION=1
+          export OF_DISABLE_MIUI_SPECIFIC_FEATURES=1
+          export OF_NO_TREBLE_COMPATIBILITY_CHECK=1
+          export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
           source build/envsetup.sh
           lunch "omni_${DEVICE}-eng" || exit 1
           mka recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           [ "${PIPESTATUS[0]}" = "0" ] || exit 1
-          ls -l "out/target/product/$DEVICE/recovery.img" || exit 1
+          ls -l "out/target/product/$DEVICE/"
 
       - name: Collect the output
         id: out
         run: |
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cd "$GITHUB_WORKSPACE/dist"
-          cp -v "$TWRP_DIR/out/target/product/$DEVICE/recovery.img" recovery.img
-          python3 "$GITHUB_WORKSPACE/tree/tools/mtk_header.py" recovery.img recovery-mtk.img RECOVERY
+          out="$TWRP_DIR/out/target/product/$DEVICE"
+          img=$(ls "$out"/OrangeFox-*.img 2>/dev/null | head -n1)
+          [ -n "$img" ] || img="$out/recovery.img"
+          name=$(basename "${img%.img}")
+          cp -v "$img" recovery.img
+          # The bootloader only accepts kernels and ramdisks with MediaTek headers
+          python3 "$GITHUB_WORKSPACE/tree/tools/mtk_header.py" recovery.img "$name-mtk.img" RECOVERY
+          rm recovery.img
           max=$(grep -oP 'BOARD_RECOVERYIMAGE_PARTITION_SIZE := \K[0-9]+' "$GITHUB_WORKSPACE/tree/BoardConfig.mk")
-          for f in recovery.img recovery-mtk.img; do
-            size=$(stat -c %s "$f")
-            echo "$f: $size / $max bytes"
-            [ "$size" -le "$max" ] || { echo "$f does not fit the recovery partition"; exit 1; }
-          done
+          size=$(stat -c %s "$name-mtk.img")
+          echo "$name-mtk.img: $size / $max bytes"
           sha256sum *.img | tee sha256sums.txt
-          version=$(grep -oP 'TW_MAIN_VERSION_STR\s*"\K[^"]+' "$TWRP_DIR/bootable/recovery/variables.h" | head -n1)
-          echo "version=${version:-3.x}" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          [ "$size" -le "$max" ] || { echo "The image does not fit the recovery partition"; exit 1; }
 
       - name: Upload the build log
         if: always()
@@ -99,18 +116,9 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload the artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: twrp-${{ steps.out.outputs.version }}-TB7304F
+          name: OrangeFox-TB7304F
           path: dist/*
-
-      - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="twrp-${{ steps.out.outputs.version }}-TB7304F-${{ github.run_number }}"
-          gh release create "$tag" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "TWRP ${{ steps.out.outputs.version }} for TB-7304F (build ${{ github.run_number }})" \
-            --notes "Untested. recovery.img is a plain Android boot image; recovery-mtk.img is the same image with MediaTek headers on the kernel and ramdisk."
+          if-no-files-found: ignore
